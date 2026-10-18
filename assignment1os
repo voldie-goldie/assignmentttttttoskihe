@@ -1,0 +1,148 @@
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sched.h>
+#include <sys/wait.h>
+
+#define students 50
+
+void bind_to_cpu(int core)
+{
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    CPU_SET(core, &allowed);
+    sched_setaffinity(0, sizeof(allowed), &allowed);
+}
+
+int main()
+{
+    int scores[students];
+    int roll_no[students];
+    int grade_code[students];
+    float pct[students];
+    char *grades[6] = {"F", "D", "C", "B", "A-", "A"};
+
+    for (int s = 0; s < students; s++)
+    {
+        scores[s] = (s * 37 + 13) % 251;
+        roll_no[s] = s + 1;
+    }
+
+    int p1[2], p2[2];
+    int p3[2], p4[2];
+
+    if (pipe(p1) == -1 || pipe(p2) == -1 ||
+        pipe(p3) == -1 || pipe(p4) == -1)
+    {
+        perror("pipe failed");
+        exit(1);
+    }
+
+    if (fork() == 0)
+    {
+        bind_to_cpu(0);
+
+        close(p1[1]);
+        close(p2[0]);
+        close(p3[0]);
+        close(p3[1]);
+        close(p4[0]);
+        close(p4[1]);
+
+        int got_scores[students];
+        float result[students];
+
+        read(p1[0], got_scores, sizeof(got_scores));
+
+        for (int s = 0; s < students; s++)
+            result[s] = got_scores[s] * 100.0 / 250.0;
+
+        write(p2[1], result, sizeof(result));
+        exit(0);
+    }
+
+    if (fork() == 0)
+    {
+        bind_to_cpu(1);
+
+        close(p1[0]);
+        close(p1[1]);
+        close(p2[0]);
+        close(p2[1]);
+        close(p3[1]);
+        close(p4[0]);
+
+        float got_pct[students];
+        int codes[students];
+
+        read(p3[0], got_pct, sizeof(got_pct));
+
+        for (int s = 0; s < students; s++)
+        {
+            if (got_pct[s] >= 90)
+                codes[s] = 5;
+            else if (got_pct[s] >= 80)
+                codes[s] = 4;
+            else if (got_pct[s] >= 70)
+                codes[s] = 3;
+            else if (got_pct[s] >= 60)
+                codes[s] = 2;
+            else if (got_pct[s] >= 50)
+                codes[s] = 1;
+            else
+                codes[s] = 0;
+        }
+
+        write(p4[1], codes, sizeof(codes));
+        exit(0);
+    }
+
+    close(p1[0]);
+    close(p2[1]);
+    close(p3[0]);
+    close(p4[1]);
+
+    write(p1[1], scores, sizeof(scores));
+    read(p2[0], pct, sizeof(pct));
+
+    write(p3[1], pct, sizeof(pct));
+    read(p4[0], grade_code, sizeof(grade_code));
+
+    wait(NULL);
+    wait(NULL);
+
+    for (int s = 0; s < students - 1; s++)
+    {
+        for (int k = 0; k < students - 1 - s; k++)
+        {
+            if (pct[k] > pct[k + 1])
+            {
+                float tmp_pct = pct[k];
+                pct[k] = pct[k + 1];
+                pct[k + 1] = tmp_pct;
+
+                int tmp_code = grade_code[k];
+                grade_code[k] = grade_code[k + 1];
+                grade_code[k + 1] = tmp_code;
+
+                int tmp_roll = roll_no[k];
+                roll_no[k] = roll_no[k + 1];
+                roll_no[k + 1] = tmp_roll;
+            }
+        }
+    }
+
+    printf("Reg_No\t%%\tGrade\n");
+
+    for (int s = 0; s < students; s++)
+    {
+        printf("%d", roll_no[s]);
+        printf("\t");
+        printf("%.2f", pct[s]);
+        printf("\t");
+        printf("%s\n", grades[grade_code[s]]);
+    }
+
+    return 0;
+}
